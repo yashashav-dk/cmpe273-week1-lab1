@@ -52,7 +52,7 @@ Service B logs the error:
 
 ## What Makes This Distributed?
 
-This system is distributed because it consists of two independent processes (Service A and Service B) that communicate over the network via HTTP rather than sharing memory or running in the same process. Each service can be started, stopped, and scaled independently. Service B does not crash when Service A becomes unavailable—instead, it gracefully handles the failure by returning a 503 status code and logging the error. This demonstrates a key property of distributed systems: partial failure, where one component can fail while others continue operating.
+This system is distributed because it consists of two independent processes (Service A and Service B) that communicate over the network via HTTP rather than sharing memory or running in the same process. Each service can be started, stopped, and scaled independently. Service B does not crash when Service A becomes unavailable and instead, it gracefully handles the failure by returning a 503 status code and logging the error. This demonstrates a key property of distributed systems: partial failure, where one component can fail while others continue operating.
 
 ## Failure Handling
 
