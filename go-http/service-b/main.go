@@ -2,49 +2,79 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
 )
 
-var client = &http.Client{Timeout: 1 * time.Second}
+var client = &http.Client{Timeout: 2 * time.Second}
 
-func health(w http.ResponseWriter, r *http.Request) {
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(rec, r)
+		log.Printf("[ServiceB] %s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start))
+	}
 }
 
-func callEcho(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	msg := r.URL.Query().Get("msg")
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
 
-	url := fmt.Sprintf("http://127.0.0.1:8080/echo?msg=%s", msg)
-	resp, err := client.Get(url)
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func callEchoHandler(w http.ResponseWriter, r *http.Request) {
+	msg := r.URL.Query().Get("msg")
+	if msg == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "missing msg parameter"})
+		return
+	}
+
+	resp, err := client.Get("http://localhost:8080/echo?msg=" + msg)
 	if err != nil {
-		log.Printf("service=B endpoint=/call-echo status=error error=%q latency_ms=%d", err.Error(), time.Since(start).Milliseconds())
+		log.Printf("[ServiceB] ERROR calling ServiceA: %v", err)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"service_b": "ok",
-			"service_a": "unavailable",
-			"error":     err.Error(),
-		})
+		json.NewEncoder(w).Encode(map[string]string{"error": "ServiceA unavailable"})
 		return
 	}
 	defer resp.Body.Close()
 
-	var data map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&data)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ServiceB] ERROR reading ServiceA response: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "failed to read ServiceA response"})
+		return
+	}
 
-	log.Printf("service=B endpoint=/call-echo status=ok latency_ms=%d", time.Since(start).Milliseconds())
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"service_b": "ok",
-		"service_a": data,
+	var echoResp map[string]interface{}
+	json.Unmarshal(body, &echoResp)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"service": "B",
+		"from_a":  echoResp,
 	})
 }
 
 func main() {
-	http.HandleFunc("/health", health)
-	http.HandleFunc("/call-echo", callEcho)
-	log.Println("service=B listening on :8081")
+	http.HandleFunc("/health", loggingMiddleware(healthHandler))
+	http.HandleFunc("/call-echo", loggingMiddleware(callEchoHandler))
+
+	log.Println("[ServiceB] listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }
